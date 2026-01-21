@@ -1,0 +1,25 @@
+---
+title: "Exploratory_Analyses"
+output: word_document
+date: "2026-01-19"
+---
+
+```{r setup, include=FALSE}
+#setwd("~/Documents/Viscaria_2025/Single_Visits/Exploratory_Analyses")
+
+#load packages
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(readr)
+
+#load data
+seeds <- read.csv("Single_Visit_Seed_Weights_2025.csv", header = T) 
+seeds <- seeds %>% mutate("Plant_Stem_ID" = paste(Plant_ID, Stem_ID, Type, sep = "_")) %>% 
+  relocate(Plant_Stem_ID, .after = Stem_ID)
+polfl <- read.csv("Single_Visit_Flower_Traits_2025.csv", header = T)
+polfl <- polfl %>% mutate("Plant_Stem_ID" = paste(Plant_ID, Stem_ID,Type, sep = "_")) %>% 
+  relocate(Plant_Stem_ID, .after = Stem_ID)
+seedwt_fitness25 <- full_join(seeds, polfl, by = c("Plant_Stem_ID")) 
+```
+
