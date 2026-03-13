@@ -836,12 +836,3 @@ ggplot(fgac_bypop_byyear, aes(x = bouts, y = richness, color = Population, fill 
   theme_classic()
 ggsave("rarefaction_bypop_fg.png", width = 20, height = 10, dpi = 300)
 ```
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
-```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
