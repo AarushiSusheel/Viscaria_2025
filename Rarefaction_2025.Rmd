@@ -1,0 +1,847 @@
+---
+title: "Surveys:Rarefaction_2025"
+output:
+  html_document:
+    df_print: paged
+date: "2026-03-05"
+---
+
+## Load packages
+```{r}
+setwd("~/Library/CloudStorage/Box-Box/DesktopB/Viscaria Data/Viscaria_2025")
+
+library(tidyverse)
+library(readxl)
+library(readr)
+library(here)
+library(reshape2)
+library(janitor) 
+library(vegan)
+library(ggplot2)
+library(RColorBrewer)
+library(nlme)
+library(pals)
+library(imputeTS)
+library(ggforce)
+library(scales)
+library(randomcoloR)
+library(vegan)
+library(fossil)
+```
+
+# *Since 2021, how many species did we see as we increased observation bouts regardless of population?*
+
+###Load and clean data (all years clubbed, modified observation IDs)
+```{r load-prep-allpop, message=FALSE, warning=FALSE}
+##SPECIES
+#Load data (all years clubbed, modified observation IDs)
+sac_allpop <- read_excel(here("Data_Clean", "Surveys", "Pollinator_Observations_2125_Clean.xlsx"),
+                         na= c("NA", ""))
+sac_allpop <- sac_allpop %>%
+  group_by(Year) %>%
+  mutate(Observation_ID_new = as.integer(factor(Observation_ID))) %>%
+  ungroup() %>%
+  mutate(Observation_ID_year = paste(Year, Observation_ID_new, sep = "_"))%>%
+  relocate(Observation_ID_new, Observation_ID_year, .after = Observation_ID)
+
+#Remove populations - club them all and only look at observation ID_year combo
+sac_allpop_counts <- sac_allpop %>% group_by(Observation_ID_year, Pollinator_Genus, Pollinator_Species) %>%
+  summarise(Total_Individuals = sum(Individuals, na.rm = T), .groups = "drop_last")%>%
+  unite(Pollinator_ID, c(Pollinator_Genus, Pollinator_Species), remove = F, na.rm = T) %>%
+  mutate(Pollinator_ID = ifelse(Pollinator_ID == "", "Unknown", Pollinator_ID))
+
+#Restructure data to wide format
+restructured_dataset <-pivot_wider(sac_allpop_counts, 
+              id_cols = Observation_ID_year,
+              names_from = Pollinator_ID, 
+              values_from = Total_Individuals)
+restructured_dataset[is.na(restructured_dataset)] <- 0
+
+sac_allpop_counts_res <- restructured_dataset %>%
+  ungroup() %>%
+  select(-Observation_ID_year)
+
+#---- 
+#FUNCTIONAL GROUPS
+#Load data (all years clubbed, modified observation IDs)
+fgac_allpop <- read_excel(here("Data_Clean", "Surveys", "Pollinator_Observations_2125_Clean.xlsx"),
+                         na= c("NA", ""))
+fgac_allpop <- fgac_allpop %>%
+  group_by(Year) %>%
+  mutate(Observation_ID_new = as.integer(factor(Observation_ID))) %>%
+  ungroup() %>%
+  mutate(Observation_ID_year = paste(Year, Observation_ID_new, sep = "_"))%>%
+  relocate(Observation_ID_new, Observation_ID_year, .after = Observation_ID)
+
+#Remove populations - club them all and only look at observation ID_year combo
+fgac_allpop_counts <- fgac_allpop %>% group_by(Observation_ID_year, Pollinator_Group_Collapsed) %>%
+  summarise(Total_Individuals = sum(Individuals, na.rm = T), .groups = "drop_last")
+
+#Restructure data to wide format
+restructured_dataset <-pivot_wider(fgac_allpop_counts, 
+              id_cols = Observation_ID_year,
+              names_from = Pollinator_Group_Collapsed, 
+              values_from = Total_Individuals)
+restructured_dataset[is.na(restructured_dataset)] <- 0
+
+fgac_allpop_counts_res <- restructured_dataset %>%
+  ungroup() %>%
+  select(-Observation_ID_year)
+```
+
+###Calculating Richeness and SD (and plotting clubbed Species Accumulation Curves) 
+```{r sac-allpop, message=FALSE, warning=FALSE}
+#SPECIES
+# Fit SAC: if we randomly add one more bout, how many species have we accumulated?
+sac_allpop_rarefaction <- specaccum(sac_allpop_counts_res, method="random",permutations=100) 
+
+# convert to df compatible with ggplot
+rarefaction_df <- data.frame(bouts = sac_allpop_rarefaction$sites, 
+                             richness = sac_allpop_rarefaction$richness, 
+                             sd = sac_allpop_rarefaction$sd)
+
+#to make compatible with sep year df
+sac_allpop_allyears <- rarefaction_df %>%
+  mutate(Year = "All Years") %>%
+  relocate(Year, .before = bouts)
+
+#plotting here is redundant, will plot with all sep years later
+#----
+## BASE R
+#plot mean richness and confidence intervals as we do more bouts = species accumulation curve
+plot(sac_allpop_rarefaction, ci.type="line", col="black", lwd=2, ci.lty=2, ci.col="gray80",
+ylab="Species (N)", xlab = "Observation Bouts", main = "Rarefaction Curve 2021-2025")
+
+# and the distribution of richness in every simulation as we do more bouts
+#At observation bout X, we found between Y and Z species depending on the order we encountered sites — the boxplot shows that uncertainty.
+boxplot(sac_allpop_rarefaction, col="yellow", pch="", ann = FALSE)
+title(ylab = "Species (N)", xlab = "Observation Bouts")
+
+## GGPLOT 
+#simple line with confidence interval
+ggplot(rarefaction_df, aes(x = bouts, y = richness)) +
+  geom_ribbon(aes(ymin = richness - 2*sd, ymax = richness + 2*sd),
+              fill = "gray80", alpha = 0.5) +
+  geom_line(color = "black", linewidth = 1) +
+  labs(x = "Observation Bouts",
+    y = "Species (N)",
+    title = "Rarefaction Curve") +
+  theme_classic()
+# with boxplots complicated, just use base R for now
+
+#----
+#FUNCTIONAL GROUPS
+# Fit SAC: if we randomly add one more bout, how many species have we accumulated?
+fgac_allpop_rarefaction <- specaccum(fgac_allpop_counts_res, method="random",permutations=100) 
+
+# convert to df compatible with ggplot
+rarefaction_df <- data.frame(bouts = fgac_allpop_rarefaction$sites, 
+                             richness = fgac_allpop_rarefaction$richness, 
+                             sd = fgac_allpop_rarefaction$sd)
+#to make compatible with sep year df
+fgac_allpop_allyears <- rarefaction_df %>%
+  mutate(Year = "All Years") %>%
+  relocate(Year, .before = bouts)
+
+#plotting here is redundant, will plot with all sep years later
+#----
+## BASE R
+#plot mean richness and confidence intervals as we do more bouts = species accumulation curve
+plot(fgac_allpop_rarefaction, ci.type="line", col="black", lwd=2, ci.lty=2, ci.col="gray80",
+ylab="Functional Groups (N)", xlab = "Observation Bouts", main = "Rarefaction Curve 2021-2025")
+
+# and the distribution of richness in every simulation as we do more bouts
+#At observation bout X, we found between Y and Z species depending on the order we encountered sites — the boxplot shows that uncertainty.
+boxplot(fgac_allpop_rarefaction, col="yellow", pch="", ann = FALSE)
+title(ylab = "Functional Groups (N)", xlab = "Observation Bouts")
+
+## GGPLOT 
+#simple line with confidence interval
+ggplot(rarefaction_df, aes(x = bouts, y = richness)) +
+  geom_ribbon(aes(ymin = richness - 2*sd, ymax = richness + 2*sd),
+              fill = "gray80", alpha = 0.5) +
+  geom_line(color = "black", linewidth = 1) +
+  labs(x = "Observation Bouts",
+    y = "Functional Groups (N)",
+    title = "Rarefaction Curve") +
+  theme_classic()
+# with boxplots complicated, just use base R for now
+```
+
+## In each year, how many species did we see as we increased observation bouts regardless of population?
+###Load data and clean (all years separated, modified observation IDs)
+```{r load-prep-allpop-byyear, message=FALSE, warning=FALSE}
+#Load data (all years clubbed, modified observation IDs)
+sac_allpop <- read_excel(here("Data_Clean", "Surveys", "Pollinator_Observations_2125_Clean.xlsx"),
+                         na= c("NA", ""))
+sac_allpop <- sac_allpop %>%
+  group_by(Year) %>%
+  mutate(Observation_ID_new = as.integer(factor(Observation_ID))) %>%
+  ungroup() %>%
+  mutate(Observation_ID_year = paste(Year, Observation_ID_new, sep = "_"))%>%
+  relocate(Observation_ID_new, Observation_ID_year, .after = Observation_ID)
+
+
+# Use loop to clean, restracture widely and run specaccum for each year and bind into single dataframe
+years <- c(2021, 2022, 2023, 2024, 2025)
+sac_allpop_byyear <- lapply(years, function(yr) {
+  
+  df <- sac_allpop %>%
+    filter(Year == yr) %>%
+    group_by(Observation_ID_year, Pollinator_Genus, Pollinator_Species) %>%
+    summarise(Total_Individuals = sum(Individuals, na.rm = TRUE), .groups = "drop") %>%
+    unite(Pollinator_ID, c(Pollinator_Genus, Pollinator_Species), remove = FALSE, na.rm = TRUE) %>%
+    mutate(Pollinator_ID = ifelse(Pollinator_ID == "", "Unknown", Pollinator_ID)) %>%
+    pivot_wider(id_cols = Observation_ID_year,
+                names_from = Pollinator_ID,
+                values_from = Total_Individuals) %>%
+    ungroup() %>%
+    select(-Observation_ID_year) %>%
+    replace(is.na(.), 0)
+  
+  sac <- specaccum(df, method = "random", permutations = 100)
+  
+  data.frame(Year = as.factor(yr),
+    bouts    = sac$sites,
+    richness = sac$richness,
+    sd       = sac$sd)}) %>% 
+bind_rows()
+
+#bind allyears with sep years
+sac_allpop_combo <- bind_rows(sac_allpop_byyear,sac_allpop_allyears) 
+
+#----
+#FUNCTIONAL GROUPS
+#Load data (all years clubbed, modified observation IDs)
+fgac_allpop <- read_excel(here("Data_Clean", "Surveys", "Pollinator_Observations_2125_Clean.xlsx"),
+                         na= c("NA", ""))
+fgac_allpop <- fgac_allpop %>%
+  group_by(Year) %>%
+  mutate(Observation_ID_new = as.integer(factor(Observation_ID))) %>%
+  ungroup() %>%
+  mutate(Observation_ID_year = paste(Year, Observation_ID_new, sep = "_"))%>%
+  relocate(Observation_ID_new, Observation_ID_year, .after = Observation_ID)
+
+
+# Use loop to clean, restracture widely and run specaccum for each year and bind into single dataframe
+years <- c(2021, 2022, 2023, 2024, 2025)
+fgac_allpop_byyear <- lapply(years, function(yr) {
+  
+  df <- fgac_allpop %>%
+    filter(Year == yr) %>%
+    group_by(Observation_ID_year, Pollinator_Group_Collapsed) %>%
+    summarise(Total_Individuals = sum(Individuals, na.rm = TRUE), .groups = "drop") %>%
+    pivot_wider(id_cols = Observation_ID_year,
+                names_from = Pollinator_Group_Collapsed,
+                values_from = Total_Individuals) %>%
+    ungroup() %>%
+    select(-Observation_ID_year) %>%
+    replace(is.na(.), 0)
+  
+  sac <- specaccum(df, method = "random", permutations = 100)
+  
+  data.frame(Year = as.factor(yr),
+    bouts    = sac$sites,
+    richness = sac$richness,
+    sd       = sac$sd)}) %>% 
+bind_rows()
+
+#bind allyears with sep years
+fgac_allpop_combo <- bind_rows(fgac_allpop_byyear,fgac_allpop_allyears) 
+```
+
+### Plotting all Species Accumulation Curves (sep years and clubbed)
+```{r sac-allpop-byyear, message=FALSE, warning=FALSE}
+
+# replace with sac_allpop_byyear for sep years
+ggplot(sac_allpop_combo, aes(x = bouts, y = richness, color = Year, fill = Year)) +
+  geom_ribbon(aes(ymin = richness - 2*sd, ymax = richness + 2*sd), 
+              alpha = 0.15, color = NA) +
+  geom_line(linewidth = 1) +
+  labs(x = "Observation Bouts", y = "Species (N)",
+       title = "Rarefaction Curves by Year") +
+  theme_classic()
+# replace with fgac_allpop_byyear for sep years
+ggplot(fgac_allpop_combo, aes(x = bouts, y = richness, color = Year, fill = Year)) +
+  geom_ribbon(aes(ymin = richness - 2*sd, ymax = richness + 2*sd), 
+              alpha = 0.15, color = NA) +
+  geom_line(linewidth = 1) +
+  labs(x = "Observation Bouts", y = "Functional Groups (N)",
+       title = "Rarefaction Curves by Year") +
+  theme_classic()
+
+```
+
+
+# *Since 2021, how many species did we see as we increased number of populations?*
+
+###Load and clean data (all years and populations clubbed, modified observation IDs)
+```{r load-prep-allpop, message=FALSE, warning=FALSE}
+##SPECIES
+#Load data (all observation bouts clubbed, modified observation IDs)
+sac_allpop <- read_excel(here("Data_Clean", "Surveys", "Pollinator_Observations_2125_Clean.xlsx"),
+                         na= c("NA", ""))
+sac_allpop <- sac_allpop %>%
+  group_by(Year) %>%
+  mutate(Observation_ID_new = as.integer(factor(Observation_ID))) %>%
+  ungroup() %>%
+  mutate(Population_Year = paste(Population, Year, sep = "_")) %>%
+  relocate(Observation_ID_new, Population_Year, .after = Observation_ID)
+
+#Remove observation bouts - club them all within pop and year and only look at pop_year combo
+sac_allpop_counts <- sac_allpop %>% group_by(Population_Year, Pollinator_Genus, Pollinator_Species) %>%
+  summarise(Total_Individuals = sum(Individuals, na.rm = T), .groups = "drop_last")%>%
+  unite(Pollinator_ID, c(Pollinator_Genus, Pollinator_Species), remove = F, na.rm = T) %>%
+  mutate(Pollinator_ID = ifelse(Pollinator_ID == "", "Unknown", Pollinator_ID))
+
+#Restructure data to wide format
+restructured_dataset <-pivot_wider(sac_allpop_counts, 
+              id_cols = Population_Year,
+              names_from = Pollinator_ID, 
+              values_from = Total_Individuals)
+restructured_dataset[is.na(restructured_dataset)] <- 0
+
+sac_allpop_counts_res <- restructured_dataset %>%
+  ungroup() %>%
+  select(-Population_Year)
+
+#---- 
+#FUNCTIONAL GROUPS
+#Load data (all years clubbed, modified observation IDs)
+fgac_allpop <- read_excel(here("Data_Clean", "Surveys", "Pollinator_Observations_2125_Clean.xlsx"),
+                         na= c("NA", ""))
+fgac_allpop <- fgac_allpop %>%
+  group_by(Year) %>%
+  mutate(Observation_ID_new = as.integer(factor(Observation_ID))) %>%
+  ungroup() %>%
+  mutate(Population_Year = paste(Population, Year, sep = "_"))%>%
+  relocate(Observation_ID_new, Population_Year, .after = Observation_ID)
+
+#Remove populations - club them all and only look at observation ID_year combo
+fgac_allpop_counts <- fgac_allpop %>% group_by(Population_Year, Pollinator_Group_Collapsed) %>%
+  summarise(Total_Individuals = sum(Individuals, na.rm = T), .groups = "drop_last")
+
+#Restructure data to wide format
+restructured_dataset <-pivot_wider(fgac_allpop_counts, 
+              id_cols = Population_Year,
+              names_from = Pollinator_Group_Collapsed, 
+              values_from = Total_Individuals)
+restructured_dataset[is.na(restructured_dataset)] <- 0
+
+fgac_allpop_counts_res <- restructured_dataset %>%
+  ungroup() %>%
+  select(-Population_Year)
+```
+
+###Calculating Richeness and SD (and plotting clubbed Species Accumulation Curves) 
+```{r sac-allpop, message=FALSE, warning=FALSE}
+#SPECIES
+# Fit SAC: if we randomly add one more population, how many species have we accumulated? (assume each population is new every year)
+sac_allpop_rarefaction <- specaccum(sac_allpop_counts_res, method="random",permutations=100) 
+
+# convert to df compatible with ggplot
+rarefaction_df <- data.frame(pops = sac_allpop_rarefaction$sites, 
+                             richness = sac_allpop_rarefaction$richness, 
+                             sd = sac_allpop_rarefaction$sd)
+#to make compatible with sep year df
+sac_allpop_allyears <- rarefaction_df %>%
+  mutate(Year = "All Years") %>%
+  relocate(Year, .before = pops)
+
+#plotting here is redundant, will plot with all sep years later
+#----
+##BASE R
+#plot mean richness and confidence intervals as we sample more populations = species accumulation curve
+plot(sac_allpop_rarefaction, ci.type="line", col="black", lwd=2, ci.lty=2, ci.col="gray80",
+ylab="Species (N)", xlab = "Populations", main = "Rarefaction Curve 2021-2025")
+
+# and the distribution of richness in every simulation as we sample more populations
+#At population X, we found between Y and Z species depending on the order we encountered sites — the boxplot shows that uncertainty.
+boxplot(sac_allpop_rarefaction, col="yellow", pch="", ann = FALSE)
+title(ylab = "Species (N)", xlab = "Populations")
+
+## GGPLOT 
+#simple line with confidence interval
+ggplot(rarefaction_df, aes(x = pops, y = richness)) +
+  geom_ribbon(aes(ymin = richness - 2*sd, ymax = richness + 2*sd),
+              fill = "gray80", alpha = 0.5) +
+  geom_line(color = "black", linewidth = 1) +
+  labs(x = "Populations",
+    y = "Species (N)",
+    title = "Rarefaction Curve") +
+  theme_classic()
+# with boxplots complicated, just use base R for now
+
+#----
+#FUNCTIONAL GROUPS
+# Fit SAC: if we randomly add one more population, how many species have we accumulated?
+fgac_allpop_rarefaction <- specaccum(fgac_allpop_counts_res, method="random",permutations=100) 
+
+# convert to df compatible with ggplot
+rarefaction_df <- data.frame(pops = fgac_allpop_rarefaction$sites, 
+                             richness = fgac_allpop_rarefaction$richness, 
+                             sd = fgac_allpop_rarefaction$sd)
+
+#to make compatible with sep year df
+fgac_allpop_allyears <- rarefaction_df %>%
+  mutate(Year = "All Years") %>%
+  relocate(Year, .before = pops)
+
+#plotting here is redundant, will plot with all sep years later
+#----
+## BASE R
+#plot mean richness and confidence intervals as we sample more populations = species accumulation curve
+plot(fgac_allpop_rarefaction, ci.type="line", col="black", lwd=2, ci.lty=2, ci.col="gray80",
+ylab="Functional Groups (N)", xlab = "Populations", main = "Rarefaction Curve 2021-2025")
+
+# and the distribution of richness in every simulation as we sample more populations
+#At population X, we found between Y and Z species depending on the order we encountered sites — the boxplot shows that uncertainty.
+boxplot(fgac_allpop_rarefaction, col="yellow", pch="", ann = FALSE)
+title(ylab = "Functional Groups (N)", xlab = "Observation Bouts")
+
+## GGPLOT 
+#simple line with confidence interval
+ggplot(rarefaction_df, aes(x = bouts, y = richness)) +
+  geom_ribbon(aes(ymin = richness - 2*sd, ymax = richness + 2*sd),
+              fill = "gray80", alpha = 0.5) +
+  geom_line(color = "black", linewidth = 1) +
+  labs(x = "Observation Bouts",
+    y = "Functional Groups (N)",
+    title = "Rarefaction Curve") +
+  theme_classic()
+# with boxplots complicated, just use base R for now
+```
+
+
+
+## In each year, how many species did we see as we increased observation bouts regardless of population?
+###Load data and clean (all years separated but populations clubbed, modified observation IDs)
+```{r load-prep-allpop-byyear, message=FALSE, warning=FALSE}
+#Load data (all years clubbed, modified observation IDs)
+sac_allpop <- read_excel(here("Data_Clean", "Surveys", "Pollinator_Observations_2125_Clean.xlsx"),
+                         na= c("NA", ""))
+sac_allpop <- sac_allpop %>%
+  group_by(Year) %>%
+  mutate(Observation_ID_new = as.integer(factor(Observation_ID))) %>%
+  ungroup() %>%
+  mutate(Population_Year = paste(Population, Year, sep = "_"))%>%
+  relocate(Observation_ID_new, Population_Year, .after = Observation_ID)
+
+
+# Use loop to clean, restracture widely and run specaccum for each year and bind into single dataframe
+years <- c(2021, 2022, 2023, 2024, 2025)
+sac_allpop_byyear <- lapply(years, function(yr) {
+  
+  df <- sac_allpop %>%
+    filter(Year == yr) %>%
+    group_by(Population_Year, Pollinator_Genus, Pollinator_Species) %>%
+    summarise(Total_Individuals = sum(Individuals, na.rm = TRUE), .groups = "drop") %>%
+    unite(Pollinator_ID, c(Pollinator_Genus, Pollinator_Species), remove = FALSE, na.rm = TRUE) %>%
+    mutate(Pollinator_ID = ifelse(Pollinator_ID == "", "Unknown", Pollinator_ID)) %>%
+    pivot_wider(id_cols = Population_Year,
+                names_from = Pollinator_ID,
+                values_from = Total_Individuals) %>%
+    ungroup() %>%
+    select(-Population_Year) %>%
+    replace(is.na(.), 0)
+  
+  sac <- specaccum(df, method = "random", permutations = 100)
+  
+  data.frame(Year = as.factor(yr),
+    pops    = sac$sites,
+    richness = sac$richness,
+    sd       = sac$sd)}) %>% 
+bind_rows()
+
+#bind allyears with sep years
+sac_allpop_combo <- bind_rows(sac_allpop_byyear,sac_allpop_allyears) 
+
+
+#----
+#FUNCTIONAL GROUPS
+#Load data (all years clubbed, modified observation IDs)
+fgac_allpop <- read_excel(here("Data_Clean", "Surveys", "Pollinator_Observations_2125_Clean.xlsx"),
+                         na= c("NA", ""))
+fgac_allpop <- fgac_allpop %>%
+  group_by(Year) %>%
+  mutate(Observation_ID_new = as.integer(factor(Observation_ID))) %>%
+  ungroup() %>%
+  mutate(Population_Year = paste(Population, Year, sep = "_"))%>%
+  relocate(Observation_ID_new, Population_Year, .after = Observation_ID)
+
+
+# Use loop to clean, restracture widely and run specaccum for each year and bind into single dataframe
+years <- c(2021, 2022, 2023, 2024, 2025)
+fgac_allpop_byyear <- lapply(years, function(yr) {
+  
+  df <- fgac_allpop %>%
+    filter(Year == yr) %>%
+    group_by(Population_Year, Pollinator_Group_Collapsed) %>%
+    summarise(Total_Individuals = sum(Individuals, na.rm = TRUE), .groups = "drop") %>%
+    pivot_wider(id_cols = Population_Year,
+                names_from = Pollinator_Group_Collapsed,
+                values_from = Total_Individuals) %>%
+    ungroup() %>%
+    select(-Population_Year) %>%
+    replace(is.na(.), 0)
+  
+  sac <- specaccum(df, method = "random", permutations = 100)
+  
+  data.frame(Year = as.factor(yr),
+    pops    = sac$sites,
+    richness = sac$richness,
+    sd       = sac$sd)}) %>% 
+bind_rows()
+
+#bind allyears with sep years
+fgac_allpop_combo <- bind_rows(fgac_allpop_byyear,fgac_allpop_allyears) 
+
+```
+
+### Plot all Species Accumulation Curves (sep and clubbed years)
+```{r sac-allpop-byyear, message=FALSE, warning=FALSE}
+#replace with sac_allpop_byyear for only sep years
+ggplot(sac_allpop_combo, aes(x = pops, y = richness, color = Year, fill = Year)) +
+  geom_ribbon(aes(ymin = richness - 2*sd, ymax = richness + 2*sd), 
+              alpha = 0.15, color = NA) +
+  geom_line(linewidth = 1) +
+  labs(x = "Populations", y = "Species (N)",
+       title = "Rarefaction Curves by Year") +
+  theme_classic()
+
+# replace with fgac_allpop_byyear for only sep years
+ggplot(fgac_allpop_combo, aes(x = pops, y = richness, color = Year, fill = Year)) +
+  geom_ribbon(aes(ymin = richness - 2*sd, ymax = richness + 2*sd), 
+              alpha = 0.15, color = NA) +
+  geom_line(linewidth = 1) +
+  labs(x = "Populations", y = "Functional Groups (N)",
+       title = "Rarefaction Curves by Year") +
+  theme_classic()
+
+```
+
+
+# *Since 2021, how many species did we see as we increased observation bouts (and observation minutes/hours), in each population*
+
+###Load and clean data (all years clubbed, modified observation IDs)
+```{r load-prep-bypop, message=FALSE, warning=FALSE}
+##SPECIES
+#Load data (all years separate, modified observation IDs)
+sac_allpop <- read_excel(here("Data_Clean", "Surveys", "Pollinator_Observations_2125_Clean.xlsx"),
+                         na= c("NA", ""))
+sac_allpop <- sac_allpop %>%
+  group_by(Year) %>%
+  mutate(Observation_ID_new = as.integer(factor(Observation_ID))) %>%
+  ungroup() %>%
+  mutate(Population_Bout = paste(Population, Observation_ID_new, sep = "_"))%>%
+  relocate(Observation_ID_new, Population_Bout, .after = Observation_ID)
+
+
+# Use loop to clean, restracture widely and run specaccum for each pop and bind into single dataframe
+y#ears <- c(2021, 2022, 2023, 2024, 2025)
+populations <- c("Knivsasen", "Hardeberga", "Veberods_Ljung", "Kullamolla", "Hallamolla",
+                 "Brosarps_Norra_Backar", "Rorum", "Baskemolla", "Petersborg", "Kvesarum",
+                 "Sodra_Rorum", "Bollerup", "Vagasked", "Klingstorp", "Tjurko",
+                 "Vasternas", "Hasslo", "Aspo_Madviksvagen", "Sturko", "Gosslunda",
+                 "Kleva_Strandskog", "Ynde", "Avaskar", "Hovmantorp", "Uras",
+                 "Torne", "Brosarps_Backar", "Animskog_Cliff", "Animskog_Creek", "Aspo_Krokvagen",
+                 "Billebjer", "Bokhultet", "Faringtofta", "Hjortahammar", "Jarnavik",
+                 "Lyckas", "Mocklo", "Mollerod", "Sjuhalla", "Skaraskog",
+                 "Svartbacksmala", "Taxas", "Varaskruv")
+
+sac_bypop <- expand_grid(Population = populations) %>%
+  pmap_dfr(function(Population) { #alternate to lapply
+    
+    # Filter for specific population combo
+    df_filtered <- sac_allpop %>%
+      filter(Population == !!Population)
+    
+    # Skip if too few observations to run specaccum
+    if (nrow(df_filtered) < 2) return(NULL)
+    
+    mat <- df_filtered %>%
+      group_by(Population_Bout, Pollinator_Genus, Pollinator_Species) %>%
+      summarise(Total_Individuals = sum(Individuals, na.rm = TRUE), .groups = "drop") %>%
+      unite(Pollinator_ID, c(Pollinator_Genus, Pollinator_Species), remove = FALSE, na.rm = TRUE) %>%
+      mutate(Pollinator_ID = ifelse(Pollinator_ID == "", "Unknown", Pollinator_ID)) %>%
+      pivot_wider(id_cols = Population_Bout,
+                  names_from = Pollinator_ID,
+                  values_from = Total_Individuals) %>%
+      ungroup() %>%
+      select(-Population_Bout) %>%
+      replace(is.na(.), 0)
+    
+    # Skip if matrix has too few rows
+    if (nrow(mat) < 2) return(NULL)
+    
+    sac <- specaccum(mat, method = "random", permutations = 100)
+    
+    data.frame(
+      Population = Population,
+      bouts      = sac$sites,
+      richness   = sac$richness,
+      sd         = sac$sd
+    )
+  })
+
+
+#---- 
+#FUNCTIONAL GROUPS
+#Load data (all years clubbed, modified observation IDs)
+fgac_allpop <- read_excel(here("Data_Clean", "Surveys", "Pollinator_Observations_2125_Clean.xlsx"),
+                         na= c("NA", ""))
+fgac_allpop <- fgac_allpop %>%
+  group_by(Year) %>%
+  mutate(Observation_ID_new = as.integer(factor(Observation_ID))) %>%
+  ungroup() %>%
+  mutate(Population_Bout = paste(Population, Observation_ID_new, sep = "_"))%>%
+  relocate(Observation_ID_new, Population_Bout, .after = Observation_ID)
+
+
+# Use loop to clean, restracture widely and run specaccum for each pop and bind into single dataframe
+#years <- c(2021, 2022, 2023, 2024, 2025)
+populations <- c("Knivsasen", "Hardeberga", "Veberods_Ljung", "Kullamolla", "Hallamolla",
+                 "Brosarps_Norra_Backar", "Rorum", "Baskemolla", "Petersborg", "Kvesarum",
+                 "Sodra_Rorum", "Bollerup", "Vagasked", "Klingstorp", "Tjurko",
+                 "Vasternas", "Hasslo", "Aspo_Madviksvagen", "Sturko", "Gosslunda",
+                 "Kleva_Strandskog", "Ynde", "Avaskar", "Hovmantorp", "Uras",
+                 "Torne", "Brosarps_Backar", "Animskog_Cliff", "Animskog_Creek", "Aspo_Krokvagen",
+                 "Billebjer", "Bokhultet", "Faringtofta", "Hjortahammar", "Jarnavik",
+                 "Lyckas", "Mocklo", "Mollerod", "Sjuhalla", "Skaraskog",
+                 "Svartbacksmala", "Taxas", "Varaskruv")
+
+fgac_bypop <- expand_grid( Population = populations) %>%
+  pmap_dfr(function(Population) { #alternate to lapply
+    
+    # Filter for specific population 
+    df_filtered <- fgac_allpop %>%
+      filter(Population == !!Population)
+    
+    # Skip if too few observations to run specaccum
+    if (nrow(df_filtered) < 2) return(NULL)
+    
+    mat <- df_filtered %>%
+      group_by(Population_Bout, Pollinator_Group_Collapsed) %>%
+      summarise(Total_Individuals = sum(Individuals, na.rm = TRUE), .groups = "drop") %>%
+      pivot_wider(id_cols = Population_Bout,
+                  names_from = Pollinator_Group_Collapsed,
+                  values_from = Total_Individuals) %>%
+      ungroup() %>%
+      select(-Population_Bout) %>%
+      replace(is.na(.), 0)
+    
+    # Skip if matrix has too few rows
+    if (nrow(mat) < 2) return(NULL)
+    
+    fgac <- specaccum(mat, method = "random", permutations = 100)
+    
+    data.frame(
+      Population = Population,
+      bouts      = fgac$sites,
+      richness   = fgac$richness,
+      sd         = fgac$sd
+    )
+  })
+
+```
+
+
+### Plotting all Species Accumulation Curves (sep years)
+```{r sac-bypop, message=FALSE, warning=FALSE}
+
+#ggplot(sac_bypop, aes(x = bouts, y = richness, color = Population, fill = Population)) +
+#convert to hours for more meaningful plots
+  ggplot(sac_bypop, aes(x = (bouts*10)/60, y = richness, color = Population, fill = Population)) +
+  geom_ribbon(aes(ymin = richness - 2*sd, ymax = richness + 2*sd), 
+              alpha = 0.15, color = NA) +
+  geom_line(linewidth = 1) +
+  #facet_wrap(~ Year, scales = "free_x") +  # free_x because years may have different n bouts
+  labs(x = "Observation Hours", y = "Species (N)",
+  #labs(x = "Observation Bouts", y = "Species (N)",
+       title = "Rarefaction Curves by Population") +
+  theme_classic()+
+  theme(legend.position = "right",
+        legend.text = element_text(size = 5))
+
+#ggsave("rarefaction_bypop_sp.png", width = 20, height = 10, dpi = 300)
+
+#FUNCTIONAL GROUPS
+#ggplot(fgac_bypop, aes(x = bouts, y = richness, color = Population, fill = Population)) +
+#convert to hours for more meaningful plots
+  ggplot(fgac_bypop, aes(x = (bouts*10)/60, y = richness, color = Population, fill = Population)) +
+  geom_ribbon(aes(ymin = richness - 2*sd, ymax = richness + 2*sd), 
+              alpha = 0.15, color = NA) +
+  geom_line(linewidth = 1) +
+  #facet_wrap(~ Year, scales = "free_x") +  # free_x because years may have different n bouts
+#  labs(x = "Observation Bouts", y = "Functional Groups (N)",
+  labs(x = "Observation Hours", y = "Functional Groups (N)",
+       title = "Rarefaction Curves by Population") +
+  theme_classic()
+#ggsave("rarefaction_bypop_fg.png", width = 20, height = 10, dpi = 300)
+```
+
+## In each year, how many species did we see as we increased observation bouts, in each population?
+###Load data and clean (all years separated, modified observation IDs)
+```{r load-prep-bypop-byyear, message=FALSE, warning=FALSE}
+#Load data (all years separate, modified observation IDs)
+sac_allpop <- read_excel(here("Data_Clean", "Surveys", "Pollinator_Observations_2125_Clean.xlsx"),
+                         na= c("NA", ""))
+sac_allpop <- sac_allpop %>%
+  group_by(Year) %>%
+  mutate(Observation_ID_new = as.integer(factor(Observation_ID))) %>%
+  ungroup() %>%
+  mutate(Population_Bout = paste(Population, Observation_ID_new, sep = "_"))%>%
+  relocate(Observation_ID_new, Population_Bout, .after = Observation_ID)
+
+
+# Use loop to clean, restracture widely and run specaccum for each year and bind into single dataframe
+years <- c(2021, 2022, 2023, 2024, 2025)
+populations <- c("Knivsasen", "Hardeberga", "Veberods_Ljung", "Kullamolla", "Hallamolla",
+                 "Brosarps_Norra_Backar", "Rorum", "Baskemolla", "Petersborg", "Kvesarum",
+                 "Sodra_Rorum", "Bollerup", "Vagasked", "Klingstorp", "Tjurko",
+                 "Vasternas", "Hasslo", "Aspo_Madviksvagen", "Sturko", "Gosslunda",
+                 "Kleva_Strandskog", "Ynde", "Avaskar", "Hovmantorp", "Uras",
+                 "Torne", "Brosarps_Backar", "Animskog_Cliff", "Animskog_Creek", "Aspo_Krokvagen",
+                 "Billebjer", "Bokhultet", "Faringtofta", "Hjortahammar", "Jarnavik",
+                 "Lyckas", "Mocklo", "Mollerod", "Sjuhalla", "Skaraskog",
+                 "Svartbacksmala", "Taxas", "Varaskruv")
+
+sac_bypop_byyear <- expand_grid(Year = years, Population = populations) %>%
+  pmap_dfr(function(Year, Population) { #alternate to lapply
+    
+    # Filter for specific year-population combo
+    df_filtered <- sac_allpop %>%
+      filter(Year == !!Year, Population == !!Population)
+    
+    # Skip if too few observations to run specaccum
+    if (nrow(df_filtered) < 2) return(NULL)
+    
+    mat <- df_filtered %>%
+      group_by(Population_Bout, Pollinator_Genus, Pollinator_Species) %>%
+      summarise(Total_Individuals = sum(Individuals, na.rm = TRUE), .groups = "drop") %>%
+      unite(Pollinator_ID, c(Pollinator_Genus, Pollinator_Species), remove = FALSE, na.rm = TRUE) %>%
+      mutate(Pollinator_ID = ifelse(Pollinator_ID == "", "Unknown", Pollinator_ID)) %>%
+      pivot_wider(id_cols = Population_Bout,
+                  names_from = Pollinator_ID,
+                  values_from = Total_Individuals) %>%
+      ungroup() %>%
+      select(-Population_Bout) %>%
+      replace(is.na(.), 0)
+    
+    # Skip if matrix has too few rows
+    if (nrow(mat) < 2) return(NULL)
+    
+    sac <- specaccum(mat, method = "random", permutations = 100)
+    
+    data.frame(
+      Population = Population,
+      Year       = as.factor(Year),
+      bouts      = sac$sites,
+      richness   = sac$richness,
+      sd         = sac$sd
+    )
+  })
+
+#----
+#FUNCTIONAL GROUPS
+#Load data (all years clubbed, modified observation IDs)
+fgac_allpop <- read_excel(here("Data_Clean", "Surveys", "Pollinator_Observations_2125_Clean.xlsx"),
+                         na= c("NA", ""))
+fgac_allpop <- fgac_allpop %>%
+  group_by(Year) %>%
+  mutate(Observation_ID_new = as.integer(factor(Observation_ID))) %>%
+  ungroup() %>%
+  mutate(Population_Bout = paste(Population, Observation_ID_new, sep = "_"))%>%
+  relocate(Observation_ID_new, Population_Bout, .after = Observation_ID)
+
+
+# Use loop to clean, restracture widely and run specaccum for each year and bind into single dataframe
+years <- c(2021, 2022, 2023, 2024, 2025)
+populations <- c("Knivsasen", "Hardeberga", "Veberods_Ljung", "Kullamolla", "Hallamolla",
+                 "Brosarps_Norra_Backar", "Rorum", "Baskemolla", "Petersborg", "Kvesarum",
+                 "Sodra_Rorum", "Bollerup", "Vagasked", "Klingstorp", "Tjurko",
+                 "Vasternas", "Hasslo", "Aspo_Madviksvagen", "Sturko", "Gosslunda",
+                 "Kleva_Strandskog", "Ynde", "Avaskar", "Hovmantorp", "Uras",
+                 "Torne", "Brosarps_Backar", "Animskog_Cliff", "Animskog_Creek", "Aspo_Krokvagen",
+                 "Billebjer", "Bokhultet", "Faringtofta", "Hjortahammar", "Jarnavik",
+                 "Lyckas", "Mocklo", "Mollerod", "Sjuhalla", "Skaraskog",
+                 "Svartbacksmala", "Taxas", "Varaskruv")
+
+fgac_bypop_byyear <- expand_grid(Year = years, Population = populations) %>%
+  pmap_dfr(function(Year, Population) { #alternate to lapply
+    
+    # Filter for specific year-population combo
+    df_filtered <- fgac_allpop %>%
+      filter(Year == !!Year, Population == !!Population)
+    
+    # Skip if too few observations to run specaccum
+    if (nrow(df_filtered) < 2) return(NULL)
+    
+    mat <- df_filtered %>%
+      group_by(Population_Bout, Pollinator_Group_Collapsed) %>%
+      summarise(Total_Individuals = sum(Individuals, na.rm = TRUE), .groups = "drop") %>%
+      pivot_wider(id_cols = Population_Bout,
+                  names_from = Pollinator_Group_Collapsed,
+                  values_from = Total_Individuals) %>%
+      ungroup() %>%
+      select(-Population_Bout) %>%
+      replace(is.na(.), 0)
+    
+    # Skip if matrix has too few rows
+    if (nrow(mat) < 2) return(NULL)
+    
+    fgac <- specaccum(mat, method = "random", permutations = 100)
+    
+    data.frame(
+      Population = Population,
+      Year       = as.factor(Year),
+      bouts      = fgac$sites,
+      richness   = fgac$richness,
+      sd         = fgac$sd
+    )
+  })
+
+```
+
+### Plotting all Species Accumulation Curves (sep years)
+```{r sac-bypop-byyear, message=FALSE, warning=FALSE}
+
+ggplot(sac_bypop_byyear, aes(x = bouts, y = richness, color = Population, fill = Population)) +
+#convert to hours for more meaningful plots
+  #ggplot(sac_bypop_byyear, aes(x = (bouts*10)/60), y = richness, color = Population, fill = Population)) +
+  geom_ribbon(aes(ymin = richness - 2*sd, ymax = richness + 2*sd), 
+              alpha = 0.15, color = NA) +
+  geom_line(linewidth = 1) +
+  facet_wrap(~ Year, scales = "free_x") +  # free_x because years may have different n bouts
+#labs(x = "Observation Hours", y = "Species (N)",
+  labs(x = "Observation Bouts", y = "Species (N)",
+       title = "Rarefaction Curves by Population and Year") +
+  theme_classic()+
+  theme(legend.position = "right",
+        legend.text = element_text(size = 5))
+
+ggsave("rarefaction_bypop_sp.png", width = 20, height = 10, dpi = 300)
+
+#FUNCTIONAL GROUPS
+ggplot(fgac_bypop_byyear, aes(x = bouts, y = richness, color = Population, fill = Population)) +
+# convert bouts to hours
+#ggplot(fgac_bypop_byyear, aes(x = (bouts*10)/60, y = richness, color = Population, fill = Population)) +
+  geom_ribbon(aes(ymin = richness - 2*sd, ymax = richness + 2*sd), 
+              alpha = 0.15, color = NA) +
+  geom_line(linewidth = 1) +
+  facet_wrap(~ Year, scales = "free_x") +  # free_x because years may have different n bouts
+#labs(x = "Observation Hours", y = "Species (N)",
+  labs(x = "Observation Bouts", y = "Functional Groups (N)",
+       title = "Rarefaction Curves by Population and Year") +
+  theme_classic()
+ggsave("rarefaction_bypop_fg.png", width = 20, height = 10, dpi = 300)
+```
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
